@@ -1,0 +1,73 @@
+plugins {
+    id 'java'
+    id 'eclipse'
+    id 'idea'
+    id 'org.jetbrains.gradle.plugin.idea-ext' version '1.1.6'
+}
+
+// This is optional, tells gradle that we want Java 11 compatible bytecode.
+// Can be removed in standalone addons
+sourceCompatibility = JavaVersion.VERSION_11
+targetCompatibility = JavaVersion.VERSION_11
+
+repositories {
+    mavenCentral()
+    maven {
+        url "https://maven.bookmap.com/maven2/releases/"
+    }
+}
+
+dependencies {
+    compileOnly group: 'org.apache.logging.log4j', name: 'log4j-api', version: '2.12.4'
+    compileOnly group: 'org.apache.logging.log4j', name: 'log4j-core', version: '2.12.4'
+
+    if (findProperty('is_built_from_main_bookmap_project')) {
+        implementation fileTree(dir: "${main_libs}", include: ['*.jar'])
+        implementation project(':Level1Api')
+        implementation project(':SimplifiedApiWrapper')
+    } else {
+        compileOnly group: 'com.bookmap.api', name: 'api-core', version: '7.5.0.21'
+        compileOnly group: 'com.bookmap.api', name: 'api-simplified', version: '7.5.0.21'
+        compileOnly group: 'org.apache.commons', name: 'commons-lang3', version: '3.11'
+
+        implementation files(new File('C:/Program Files/Bookmap/lib').listFiles({ file -> file.name.endsWith('.jar') } as FileFilter))
+        implementation files('libs/bm-strategies.jar')
+    }
+}
+
+jar {
+    archiveFileName = 'bm-strategies.jar'
+}
+
+eclipse.classpath.downloadJavadoc = true
+idea.module.downloadJavadoc = true
+
+if(idea.project) {
+    // Create 'BookmapJar' run configuration for IntelliJ
+    idea.project.settings.runConfigurations {
+        def addOpensOptions = '--add-opens=java.base/java.lang=ALL-UNNAMED\n' +
+                '--add-opens=java.base/java.io=ALL-UNNAMED\n' +
+                '--add-opens=java.base/java.math=ALL-UNNAMED\n' +
+                '--add-opens=java.base/java.util=ALL-UNNAMED\n' +
+                '--add-opens=java.base/java.util.concurrent=ALL-UNNAMED\n' +
+                '--add-opens=java.base/java.net=ALL-UNNAMED\n' +
+                '--add-opens=java.base/java.text=ALL-UNNAMED\n' +
+                '--add-opens=java.desktop/java.awt=ALL-UNNAMED\n' +
+                '--add-opens=java.desktop/java.awt.color=ALL-UNNAMED\n' +
+                '--add-opens=java.desktop/java.awt.peer=ALL-UNNAMED\n' +
+                '--add-opens=java.desktop/com.sun.java.swing=ALL-UNNAMED\n' +
+                '--add-opens=java.prefs/java.util.prefs=ALL-UNNAMED\n'
+        if (org.gradle.internal.os.OperatingSystem.current().isWindows()) {
+            addOpensOptions += '--add-opens=java.desktop/sun.awt.windows=ALL-UNNAMED\n'
+        }
+
+        def classpathOption = '-classpath ' + 'C:\\Users\\vlads\\Desktop\\DemoStrategies\\Strategies\\build\\libs\\bm-strategies.jar'
+
+        'BookmapJar'(org.jetbrains.gradle.ext.JarApplication) {
+            // Change the path to Bookmap.jar here if you changed the default installation directory
+            jarPath = 'C:\\Program Files\\Bookmap\\Bookmap.jar'
+            workingDirectory = 'C:\\Bookmap'
+            jvmArgs = addOpensOptions + classpathOption
+        }
+    }
+}
