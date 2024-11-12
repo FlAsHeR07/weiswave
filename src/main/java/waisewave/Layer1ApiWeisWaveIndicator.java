@@ -12,8 +12,6 @@ import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import velox.api.layer1.*;
 import velox.api.layer1.annotations.Layer1ApiVersion;
 import velox.api.layer1.annotations.Layer1ApiVersionValue;
@@ -59,43 +57,65 @@ public class Layer1ApiWeisWaveIndicator implements
 
     private static class BarEvent implements CustomGeneratedEvent, DataCoordinateMarker {
         private static final long serialVersionUID = 1L;
-        /**
-         * While bar is being accumulated we store open time here, then we change it to
-         * actual event time.
-         */
         private long time;
-
-        double open;
-        double low;
-        double high;
-        double close;
-
+        private double price, volume;
+        private boolean isUpWave;
         transient int bodyWidthPx;
 
+        // Interaction with setters
+        private int mov;
+        private int trend;
+
+
         public BarEvent(long time) {
-            this(time, Double.NaN);
-        }
-
-        public BarEvent(long time, double open) {
-            this(time, open, -1);
-        }
-
-        public BarEvent(long time, double open, int bodyWidthPx) {
-            this(time, open, open, open, open, bodyWidthPx);
-        }
-
-        public BarEvent(long time, double open, double low, double high, double close, int bodyWidthPx) {
-            super();
             this.time = time;
-            this.open = open;
-            this.low = low;
-            this.high = high;
-            this.close = close;
+            this.price = Double.NaN;
+            this.volume = 0;
+            isUpWave = true;
+        }
+
+        public BarEvent(long time, double price, double volume, int bodyWidthPx) {
+            isUpWave = true;
+            this.time = time;
+            this.price = price;
+            this.volume = volume;
+            this.bodyWidthPx = bodyWidthPx;
+        }
+
+        public BarEvent(long time, double price, double volume, boolean isUpWave, int bodyWidthPx) {
+            this.time = time;
+            this.price = price;
+            this.volume = volume;
+            this.isUpWave = isUpWave;
             this.bodyWidthPx = bodyWidthPx;
         }
 
         public BarEvent(BarEvent other) {
-            this(other.time, other.open, other.low, other.high, other.close, other.bodyWidthPx);
+            this(other.time, other.price, other.volume, other.isUpWave, other.bodyWidthPx);
+        }
+
+        public int getMov() {
+            return mov;
+        }
+
+        public void setMov(int mov) {
+            this.mov = mov;
+        }
+
+        public int getTrend() {
+            return trend;
+        }
+
+        public void setTrend(int trend) {
+            this.trend = trend;
+        }
+
+        public boolean isUpWave() {
+            return isUpWave;
+        }
+
+        public void setUpWave(boolean upWave) {
+            isUpWave = upWave;
         }
 
         public void setTime(long time) {
@@ -109,52 +129,68 @@ public class Layer1ApiWeisWaveIndicator implements
 
         @Override
         public Object clone() {
-            return new BarEvent(time, open, low, high, close, bodyWidthPx);
+            return new BarEvent(time, price, volume, isUpWave, bodyWidthPx);
         }
 
         @Override
         public String toString() {
-            return "[" + time + ": " + open + "/" + low + "/" + high + "/" + close + "]";
+            return "BarEvent{" +
+                    "time=" + time +
+                    ", price=" + price +
+                    ", volume=" + volume +
+                    ", color=" + isUpWave +
+                    ", bodyWidthPx=" + bodyWidthPx +
+                    '}';
         }
 
         @Override
         public double getMinY() {
-            return open;
+            return 0;
         }
 
         @Override
         public double getMaxY() {
-            return high;
+            return volume;
         }
 
         @Override
         public double getValueY() {
-            return low;
+            return volume;
         }
 
-        public void update(double price) {
-            if (Double.isNaN(price)) {
+        public void accumulateVolume(BarEvent barEvent) {
+            if (barEvent == null) {
                 return;
             }
 
-            // If bar was not initialized yet
-            if (Double.isNaN(open)) {
-                open = price;
-                low = price;
-                high = price;
-            } else {
-                low = Math.min(low, price);
-                high = Math.max(high, price);
-            }
-            close = price;
+            volume += barEvent.volume;
         }
 
-        public void update(BarEvent nextBar) {
-            // Inefficient, but simple
-            update(nextBar.open);
-            update(nextBar.low);
-            update(nextBar.high);
-            update(nextBar.close);
+        public void update(BarEvent barEvent) {
+            if (barEvent == null) {
+                return;
+            }
+
+            price = barEvent.price;
+            volume += barEvent.volume;
+        }
+
+        public static double calculateVolume(TradeAggregationEvent event) {
+            double totalVolume = 0;
+            totalVolume += calculateMapVolume(event.askAggressorMap);
+            totalVolume += calculateMapVolume(event.bidAggressorMap);
+            return totalVolume;
+        }
+
+        private static double calculateMapVolume(Map<Double, Map<Integer, Integer>> aggressorMap) {
+            double volume = 0;
+            for (Map.Entry<Double, Map<Integer, Integer>> priceLevelEntry : aggressorMap.entrySet()) {
+                Map<Integer, Integer> tradeSizes = priceLevelEntry.getValue();
+                for (Map.Entry<Integer, Integer> tradeEntry : tradeSizes.entrySet()) {
+                    volume += tradeEntry.getKey() * tradeEntry.getValue();
+                }
+            }
+            return volume;
         }
 
         public void setBodyWidthPx(int bodyWidthPx) {
@@ -164,25 +200,12 @@ public class Layer1ApiWeisWaveIndicator implements
         @Override
         public Marker makeMarker(Function<Double, Integer> yDataCoordinateToPixelFunction) {
 
-            /*
-             * Note, that caching and reusing markers would improve efficiency, but for
-             * simplicity we won't do that here. If you do decide to cache the icons - be
-             * mindful of the cache size.
-             */
-            if (bodyWidthPx < 0) {
-                return new Marker(open, 1, 1, new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB));
+            if (Double.isNaN(price)) {
+                return new Marker(1, 1, 1, new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB));
             }
 
-            int top = yDataCoordinateToPixelFunction.apply(high);
-            int bottom = yDataCoordinateToPixelFunction.apply(low);
-            int openPx = yDataCoordinateToPixelFunction.apply(open);
-            int closePx = yDataCoordinateToPixelFunction.apply(close);
-
-            int bodyLow = Math.min(openPx, closePx);
-            int bodyHigh = Math.max(openPx, closePx);
-
-            int imageHeight = top - bottom + 1;
-            BufferedImage bufferedImage = new BufferedImage(bodyWidthPx, imageHeight, BufferedImage.TYPE_INT_ARGB);
+            int volumePx = Math.abs(yDataCoordinateToPixelFunction.apply(volume));
+            BufferedImage bufferedImage = new BufferedImage(bodyWidthPx, volumePx + 1, BufferedImage.TYPE_INT_ARGB);
             int imageCenterX = bufferedImage.getWidth() / 2;
 
             Graphics2D graphics = bufferedImage.createGraphics();
@@ -190,39 +213,14 @@ public class Layer1ApiWeisWaveIndicator implements
             graphics.setBackground(new Color(0, 0, 0, 0));
             graphics.clearRect(0, 0, bufferedImage.getWidth(), bufferedImage.getHeight());
 
-            /*
-             * Draw "shadow", also known as "wick". Here we'll take advantage of the fact
-             * we'll later draw a non-transparent body over it. If body would be
-             * semi-transparent you'd have to take that into account and leave (or make) a
-             * gap in the shadow.
-             */
-            graphics.setColor(Color.WHITE);
-            graphics.drawLine(imageCenterX, 0, imageCenterX, imageHeight);
-
-
-            /*
-             * Draw body. Keep in mind that BufferedImage coordinate system starts from the
-             * left top corner and Y axis points downwards
-             */
-            graphics.setColor(open < close ? Color.GREEN : Color.RED);
-            graphics.fillRect(0, top - bodyHigh, bodyWidthPx, bodyHigh - bodyLow + 1);
+            // Fill bar with appropriate color
+            graphics.setColor(isUpWave ? Color.GREEN : Color.RED);
+            graphics.fillRect(0, 0, bufferedImage.getWidth() - 1, bufferedImage.getHeight() - 1);
 
             graphics.dispose();
 
-            /*
-             * This one is a little tricky. We have a reference point which we'll pass as
-             * markerY. Now we need to compute offsets so that icon is where we want it to
-             * be. Since we took close as a reference point, we want to offset the icon so
-             * that close is at the markerY. Zero offset would align bottom of the icon with
-             * a value, so we do this:
-             */
-            int iconOffsetY = bottom - closePx;
-            /*
-             * This one is simple, we just want to center the bar vertically over where it
-             * should be.
-             */
-            int iconOffsetX = -imageCenterX;
-            return new Marker(close, iconOffsetX, iconOffsetY, bufferedImage);
+            return new Marker(volume, -(bufferedImage.getWidth() / 2),
+                    yDataCoordinateToPixelFunction.apply(0.) - volumePx, bufferedImage);
         }
 
         /**
@@ -231,10 +229,7 @@ public class Layer1ApiWeisWaveIndicator implements
          * panel we want to convert into price
          */
         public void applyPips(double pips) {
-            open *= pips;
-            low *= pips;
-            high *= pips;
-            close *= pips;
+            price *= pips;
         }
     }
 
@@ -360,22 +355,75 @@ public class Layer1ApiWeisWaveIndicator implements
                 new DataStructureInterface.StandardEvents[] {DataStructureInterface.StandardEvents.TRADE});
 
         int bodyWidthPx = getBodyWidth(intervalWidth);
+        TradeAggregationEvent currentTrade = (TradeAggregationEvent)intervalResponse.get(1).events.get(DataStructureInterface.StandardEvents.TRADE.toString());;
+        TradeAggregationEvent anchorTrade = currentTrade;
+        BarEvent previousBar = null;
+        int createdBars = 0;
+        int currentInterval = 2;
+        double accumulatedVolume = 0;
 
-        TradeAggregationEvent currentTrade = (TradeAggregationEvent)intervalResponse.get(1).events.get(DataStructureInterface.StandardEvents.TRADE.toString());
-        double open = currentTrade.lastPrice;
-        long previousTime = currentTrade.time;
-        for (int i = 2; i <= intervalsNumber; i++) {
-            currentTrade = (TradeAggregationEvent)intervalResponse.get(i).events.get(DataStructureInterface.StandardEvents.TRADE.toString());
-            if(currentTrade.time - previousTime >= CANDLE_INTERVAL_NS) {
-                BarEvent bar = new BarEvent(currentTrade.time, open, Math.min(open, currentTrade.lastPrice),
-                        Math.max(open, currentTrade.lastPrice), currentTrade.lastPrice, bodyWidthPx);
+        while (createdBars < 1 && currentInterval < intervalResponse.size()) {
+            currentTrade = (TradeAggregationEvent)intervalResponse.get(currentInterval).events.get(DataStructureInterface.StandardEvents.TRADE.toString());
+
+            if (currentTrade.time - anchorTrade.time >= CANDLE_INTERVAL_NS) {
+                accumulatedVolume += BarEvent.calculateVolume(currentTrade);
+
+                BarEvent bar = new BarEvent(currentTrade.time, currentTrade.lastPrice, accumulatedVolume,
+                        true, bodyWidthPx);
+                previousBar = bar;
+                bar.setMov(1);
+                bar.setTrend(1);
                 bar.applyPips(pips);
                 listener.provideResponse(bar);
-                open = currentTrade.lastPrice;
-                previousTime = currentTrade.time;
+
+                anchorTrade = currentTrade;
+                accumulatedVolume = 0;
+                createdBars++;
             } else {
-                listener.provideResponse(new BarEvent(currentTrade.time, open, -1));
+                listener.provideResponse(new BarEvent(currentTrade.time));
+                accumulatedVolume += BarEvent.calculateVolume(currentTrade);
             }
+
+            currentInterval++;
+        }
+
+        while (currentInterval < intervalsNumber && currentInterval < intervalResponse.size()) {
+            currentTrade = (TradeAggregationEvent)intervalResponse.get(currentInterval).events.get(DataStructureInterface.StandardEvents.TRADE.toString());
+
+            if (currentTrade.time - anchorTrade.time >= CANDLE_INTERVAL_NS) {
+                accumulatedVolume += BarEvent.calculateVolume(currentTrade);
+
+                BarEvent bar = new BarEvent(currentTrade.time, currentTrade.lastPrice, accumulatedVolume,
+                        true, bodyWidthPx);
+
+                bar.applyPips(pips);
+                bar.setMov(bar.price > previousBar.price ? 1 : (bar.price < previousBar.price ? -1 : 0));
+                bar.setTrend((bar.mov != 0) && (bar.mov != previousBar.mov) ? bar.mov : previousBar.trend);
+                boolean isTrending = bar.mov == previousBar.mov;
+                boolean isUpWave = isTrending ? (bar.trend == 1) : previousBar.isUpWave;
+                double volume = isUpWave == previousBar.isUpWave ? (previousBar.volume + accumulatedVolume) : accumulatedVolume;
+
+                bar.isUpWave = isUpWave;
+                bar.volume = volume;
+
+                listener.provideResponse(bar);
+
+                previousBar = bar;
+                anchorTrade = currentTrade;
+                accumulatedVolume = 0;
+            } else {
+                listener.provideResponse(new BarEvent(currentTrade.time));
+                accumulatedVolume += BarEvent.calculateVolume(currentTrade);
+            }
+
+            currentInterval++;
+        }
+
+        // Plug cycle
+        while (currentInterval <= intervalsNumber) {
+            listener.provideResponse(new BarEvent(currentTrade.time));
+
+            currentInterval++;
         }
 
         listener.setCompleted();
@@ -555,7 +603,7 @@ public class Layer1ApiWeisWaveIndicator implements
                     if (barStartTime != bar.time) {
                         bar.setTime(time);
                         consumer.accept(new CustomGeneratedEventAliased(bar, alias));
-                        bar = new BarEvent(barStartTime, bar.close);
+                        bar = new BarEvent(barStartTime);
                         entry.setValue(bar);
                     }
                 }
