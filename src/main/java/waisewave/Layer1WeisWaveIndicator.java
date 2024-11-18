@@ -129,7 +129,6 @@ public class Layer1WeisWaveIndicator implements
 
         @Override
         public Marker makeMarker(Function<Double, Integer> yDataCoordinateToPixelFunction) {
-
             if (Double.isNaN(price)) {
                 return new Marker(1, 1, 1, new BufferedImage(1, 1, BufferedImage.TYPE_INT_ARGB));
             }
